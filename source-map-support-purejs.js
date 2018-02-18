@@ -7,7 +7,7 @@ var uncaughtShimInstalled = false;
 var emptyCacheBetweenOperations = false;
 
 // Supports {browser, node, auto}
-var environment = "auto";
+var environment = "browser";
 
 // Maps a file path to a string containing the file contents
 var fileContentsCache = {};
@@ -34,29 +34,17 @@ function hasGlobalProcessEventEmitter() {
     return ((typeof process === 'object') && (process !== null) && (typeof process.on === 'function'));
 }
 
-
-var retrieveFile = handlerExec(retrieveFileHandlers);
-
-retrieveFileHandlers.push(function(path) {
-    // Trim the path to make sure there is no extra whitespace.
-    path = path.trim();
-    if (/^file:/.test(path)) {
-        // existsSync/readFileSync can't handle file protocol, but once stripped, it works
-        path = path.replace(/file:\/\/\/(\w:)?/, function(protocol, drive) {
-            return drive ?
-                '' : // file:///C:/dir/file -> C:/dir/file
-                '/'; // file:///root-dir/file -> /root-dir/file
-        });
-    }
-    if (path in fileContentsCache) {
-        return fileContentsCache[path];
-    }
-
-
-    return fileContentsCache[path] = contents;
-});
-
-
+function handlerExec(list) {
+    return function(arg) {
+        for (var i = 0; i < list.length; i++) {
+            var ret = list[i](arg);
+            if (ret) {
+                return ret;
+            }
+        }
+        return null;
+    };
+}
 function retrieveSourceMapURL(source) {
     var fileData;
 
@@ -78,33 +66,22 @@ function retrieveSourceMapURL(source) {
 // JSON object (ie, it must be a valid argument to the SourceMapConsumer
 // constructor).
 var retrieveSourceMap = handlerExec(retrieveMapHandlers);
-retrieveMapHandlers.push(function(source) {
-    var sourceMappingURL = retrieveSourceMapURL(source);
-    if (!sourceMappingURL) return null;
 
-    // Read the contents of the source map
-    var sourceMapData;
-    if (reSourceMap.test(sourceMappingURL)) {
-        // Support source map URL as a data url
-        var rawData = sourceMappingURL.slice(sourceMappingURL.indexOf(',') + 1);
-        sourceMapData = new Buffer(rawData, "base64").toString();
-        sourceMappingURL = source;
-    } else {
-        // Support source map URLs relative to the source URL
-        sourceMappingURL = supportRelativeURL(source, sourceMappingURL);
-        sourceMapData = retrieveFile(sourceMappingURL);
+// Support URLs relative to a directory, but be careful about a protocol prefix
+// in case we are in the browser (i.e. directories may start with "http://" or "file:///")
+function supportRelativeURL(file, url) {
+    if (!file) return url;
+    var dir = path.dirname(file);
+    var match = /^\w+:\/\/[^\/]*/.exec(dir);
+    var protocol = match ? match[0] : '';
+    var startPath = dir.slice(protocol.length);
+    if (protocol && /^\/\w\:/.test(startPath)) {
+        // handle file:///C:/ paths
+        protocol += '/';
+        return protocol + path.resolve(dir.slice(protocol.length), url).replace(/\\/g, '/');
     }
-
-    if (!sourceMapData) {
-        return null;
-    }
-
-    return {
-        url: sourceMappingURL,
-        map: sourceMapData
-    };
-});
-
+    return protocol + path.resolve(dir.slice(protocol.length), url);
+}
 function mapSourcePosition(position) {
     var sourceMap = sourceMapCache[position.source];
     if (!sourceMap) {
@@ -145,8 +122,8 @@ function mapSourcePosition(position) {
         // better to give a precise location in the compiled file than a vague
         // location in the original file.
         if (originalPosition.source !== null) {
-            originalPosition.source = supportRelativeURL(
-                sourceMap.url, originalPosition.source);
+            // originalPosition.source = supportRelativeURL(
+            //     sourceMap.url, originalPosition.source);
             return originalPosition;
         }
     }
@@ -388,7 +365,15 @@ exports.retrieveSourceMap = retrieveSourceMap;
 
 exports.install = function(options) {
     options = options || {};
+    // Allow source maps to be found by methods other than reading the files
+    // directly from disk.
+    if (options.retrieveSourceMap) {
+        if (options.overrideRetrieveSourceMap) {
+            retrieveMapHandlers.length = 0;
+        }
 
+        retrieveMapHandlers.unshift(options.retrieveSourceMap);
+    }
 
     // Configure options
     if (!emptyCacheBetweenOperations) {

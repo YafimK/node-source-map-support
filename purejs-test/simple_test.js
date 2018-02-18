@@ -10,8 +10,6 @@ jsFiles = jsFiles.map(function(file) {
         code: fs.readFileSync(file).toString()
     }
 });
-concat.add('', "require('../source-map-support-purejs.js').install({\n" +
-    "});");
 concat.add(jsFiles[0].source, jsFiles[0].code);
 concat.add('', 'function userFuncEnclosed(load) {');
 concat.add(jsFiles[1].source, jsFiles[1].code);
@@ -26,9 +24,10 @@ var sourceMapForContent = concat.sourceMap;
 
 const inlineSourceMapComment = inlineSourceMapCommentGenerator(sourceMapForContent, {block: true});
 
-var finalSourceMapFile = '//# sourceMappingURL=__compiledScript.js.map' + '\n\n' + concatenatedContent;
+// var finalSourceMapFile = '//# sourceMappingURL=__compiledScript.js.map' + '\n\n' + concatenatedContent;
 // var finalSourceMapFile = '//# sourceMappingURL=' +inlineSourceMapComment + '\n\n' + concatenatedContent;
-console.log(finalSourceMapFile);
+var finalSourceMapFile = concatenatedContent;
+// console.log(finalSourceMapFile);
 
 
 

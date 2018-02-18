@@ -5,4 +5,4 @@ exports.testFunc = function(arg) {
     a.foo;
 };
 
-v.foo()
+// v.foo()
