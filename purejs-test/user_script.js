@@ -5,7 +5,7 @@ func.testFunc();
 load.action('Main', () => {
     const transaction = new load.Transaction("My Transaction");
 transaction.start();
-const request = new load.WebRequest("http://kalimanjaro.hpeswlab.net/WebTours/");
+const request = new load.WebRequest("http://www.google.com");
 const response = request.sendSync();
 load.sleep(2.5);
 transaction.update();
