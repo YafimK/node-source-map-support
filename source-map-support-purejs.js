@@ -1,109 +1,35 @@
-var SourceMapConsumer = require('source-map').SourceMapConsumer;
+let SourceMapConsumer = require('./source-map-consumer.js').SourceMapConsumer;
+
 // Only install once if called multiple times
-var errorFormatterInstalled = false;
-var uncaughtShimInstalled = false;
+let errorFormatterInstalled = false;
 
 // If true, the caches are reset before a stack trace formatting operation
-var emptyCacheBetweenOperations = false;
-
-// Supports {browser, node, auto}
-var environment = "browser";
-
-// Maps a file path to a string containing the file contents
-var fileContentsCache = {};
+let emptyCacheBetweenOperations = false;
+let defaultMapOffset = 0;
 
 // Maps a file path to a source map for that file
-var sourceMapCache = {};
-
-// Regex for detecting source maps
-var reSourceMap = /^data:application\/json[^,]+base64,/;
-
-// Priority list of retrieve handlers
-var retrieveFileHandlers = [];
-var retrieveMapHandlers = [];
-
-function isInBrowser() {
-    if (environment === "browser")
-        return true;
-    if (environment === "node")
-        return false;
-    return ((typeof window !== 'undefined') && (typeof XMLHttpRequest === 'function') && !(window.require && window.module && window.process && window.process.type === "renderer"));
-}
-
-function hasGlobalProcessEventEmitter() {
-    return ((typeof process === 'object') && (process !== null) && (typeof process.on === 'function'));
-}
-
-function handlerExec(list) {
-    return function(arg) {
-        for (var i = 0; i < list.length; i++) {
-            var ret = list[i](arg);
-            if (ret) {
-                return ret;
-            }
-        }
-        return null;
-    };
-}
-function retrieveSourceMapURL(source) {
-    var fileData;
-
-
-    // Get the URL of the source map
-    fileData = retrieveFile(source);
-    var re = /(?:\/\/[@#][ \t]+sourceMappingURL=([^\s'"]+?)[ \t]*$)|(?:\/\*[@#][ \t]+sourceMappingURL=([^\*]+?)[ \t]*(?:\*\/)[ \t]*$)/mg;
-    // Keep executing the search to find the *last* sourceMappingURL to avoid
-    // picking up sourceMappingURLs from comments, strings, etc.
-    var lastMatch, match;
-    while (match = re.exec(fileData)) lastMatch = match;
-    if (!lastMatch) return null;
-    return lastMatch[1];
-};
+let sourceMapCache = {};
 
 // Can be overridden by the retrieveSourceMap option to install. Takes a
 // generated source filename; returns a {map, optional url} object, or null if
 // there is no source map.  The map field may be either a string or the parsed
 // JSON object (ie, it must be a valid argument to the SourceMapConsumer
 // constructor).
-var retrieveSourceMap = handlerExec(retrieveMapHandlers);
+let retrieveSourceMap = undefined;
 
-// Support URLs relative to a directory, but be careful about a protocol prefix
-// in case we are in the browser (i.e. directories may start with "http://" or "file:///")
-function supportRelativeURL(file, url) {
-    if (!file) return url;
-    var dir = path.dirname(file);
-    var match = /^\w+:\/\/[^\/]*/.exec(dir);
-    var protocol = match ? match[0] : '';
-    var startPath = dir.slice(protocol.length);
-    if (protocol && /^\/\w\:/.test(startPath)) {
-        // handle file:///C:/ paths
-        protocol += '/';
-        return protocol + path.resolve(dir.slice(protocol.length), url).replace(/\\/g, '/');
-    }
-    return protocol + path.resolve(dir.slice(protocol.length), url);
-}
 function mapSourcePosition(position) {
-    var sourceMap = sourceMapCache[position.source];
+    let sourceMap = sourceMapCache[position.source];
     if (!sourceMap) {
         // Call the (overrideable) retrieveSourceMap function to get the source map.
-        var urlAndMap = retrieveSourceMap(position.source);
+        const urlAndMap = retrieveSourceMap(position.source);
         if (urlAndMap) {
             sourceMap = sourceMapCache[position.source] = {
                 url: urlAndMap.url,
-                map: new SourceMapConsumer(urlAndMap.map)
+                map: new SourceMapConsumer(urlAndMap.map, defaultMapOffset)
             };
 
             // Load all sources stored inline with the source map into the file cache
             // to pretend like they are already loaded. They may not exist on disk.
-            if (sourceMap.map.sourcesContent) {
-                sourceMap.map.sources.forEach(function(source, i) {
-                    var contents = sourceMap.map.sourcesContent[i];
-                    if (contents) {
-                        var url = supportRelativeURL(sourceMap.url, source);
-                        fileContentsCache[url] = contents;
-                    }
-                });
-            }
         } else {
             sourceMap = sourceMapCache[position.source] = {
                 url: null,
@@ -114,16 +40,13 @@ function mapSourcePosition(position) {
 
     // Resolve the source URL relative to the URL of the source map
     if (sourceMap && sourceMap.map) {
-        var originalPosition = sourceMap.map.originalPositionFor(position);
-
+        const originalPosition = sourceMap.map.originalPositionFor(position);
         // Only return the original position if a matching line was found. If no
         // matching line is found then we return position instead, which will cause
         // the stack trace to print the path and line for the compiled file. It is
         // better to give a precise location in the compiled file than a vague
         // location in the original file.
         if (originalPosition.source !== null) {
-            // originalPosition.source = supportRelativeURL(
-            //     sourceMap.url, originalPosition.source);
             return originalPosition;
         }
     }
@@ -135,21 +58,21 @@ function mapSourcePosition(position) {
 // https://code.google.com/p/v8/source/browse/trunk/src/messages.js
 function mapEvalOrigin(origin) {
     // Most eval() calls are in this format
-    var match = /^eval at ([^(]+) \((.+):(\d+):(\d+)\)$/.exec(origin);
+    let match = /^eval at ([^(]+) \((.+):(\d+):(\d+)\)$/.exec(origin);
     if (match) {
-        var position = mapSourcePosition({
+        let position = mapSourcePosition({
             source: match[2],
             line: +match[3],
             column: match[4] - 1
         });
-        return 'eval at ' + match[1] + ' (' + position.source + ':' +
-            position.line + ':' + (position.column + 1) + ')';
+        return `eval at ${match[1]} (${position.source}:${
+            position.line}:${position.column + 1})`;
     }
 
     // Parse nested eval() calls using recursion
     match = /^eval at ([^(]+) \((.+)\)$/.exec(origin);
     if (match) {
-        return 'eval at ' + match[1] + ' (' + mapEvalOrigin(match[2]) + ')';
+        return `eval at ${match[1]} (${mapEvalOrigin(match[2])})`;
     }
 
     // Make sure we still return useful information if we didn't find anything
@@ -162,16 +85,16 @@ function mapEvalOrigin(origin) {
 // code of CallSite.prototype.toString but unfortunately a new release of V8
 // did something to the prototype chain and broke the shim. The only fix I
 // could find was copy/paste.
-function CallSiteToString() {
-    var fileName;
-    var fileLocation = "";
+function callSiteToString() {
+    let fileName;
+    let fileLocation = '';
     if (this.isNative()) {
-        fileLocation = "native";
+        fileLocation = 'native';
     } else {
         fileName = this.getScriptNameOrSourceURL();
         if (!fileName && this.isEval()) {
             fileLocation = this.getEvalOrigin();
-            fileLocation += ", ";  // Expecting source position to follow.
+            fileLocation += ', '; // Expecting source position to follow.
         }
 
         if (fileName) {
@@ -180,43 +103,39 @@ function CallSiteToString() {
             // Source code does not originate from a file and is not native, but we
             // can still get the source position inside the source string, e.g. in
             // an eval string.
-            fileLocation += "<anonymous>";
+            fileLocation += '<anonymous>';
         }
-        var lineNumber = this.getLineNumber();
+        let lineNumber = this.getLineNumber();
         if (lineNumber != null) {
-            fileLocation += ":" + lineNumber;
-            var columnNumber = this.getColumnNumber();
+            fileLocation += `:${lineNumber}`;
+            let columnNumber = this.getColumnNumber();
             if (columnNumber) {
-                fileLocation += ":" + columnNumber;
+                fileLocation += `:${columnNumber}`;
             }
         }
     }
 
-    var line = "";
-    var functionName = this.getFunctionName();
-    var addSuffix = true;
-    var isConstructor = this.isConstructor();
-    var isMethodCall = !(this.isToplevel() || isConstructor);
+    let line = '';
+    let functionName = this.getFunctionName();
+    let addSuffix = true;
+    let isConstructor = this.isConstructor();
+    let isMethodCall = !(this.isToplevel() || isConstructor);
     if (isMethodCall) {
-        var typeName = this.getTypeName();
-        // Fixes shim to be backward compatable with Node v0 to v4
-        if (typeName === "[object Object]") {
-            typeName = "null";
-        }
-        var methodName = this.getMethodName();
+        let typeName = this.getTypeName();
+        let methodName = this.getMethodName();
         if (functionName) {
-            if (typeName && functionName.indexOf(typeName) != 0) {
-                line += typeName + ".";
+            if (typeName && functionName.indexOf(typeName) !== 0) {
+                line += `${typeName}.`;
             }
             line += functionName;
-            if (methodName && functionName.indexOf("." + methodName) != functionName.length - methodName.length - 1) {
-                line += " [as " + methodName + "]";
+            if (methodName && functionName.indexOf(`.${methodName}`) !== functionName.length - methodName.length - 1) {
+                line += ` [as ${methodName}]`;
             }
         } else {
-            line += typeName + "." + (methodName || "<anonymous>");
+            line += `${typeName}.${methodName || '<anonymous>'}`;
         }
     } else if (isConstructor) {
-        line += "new " + (functionName || "<anonymous>");
+        line += `new ${functionName || '<anonymous>'}`;
     } else if (functionName) {
         line += functionName;
     } else {
@@ -224,41 +143,33 @@ function CallSiteToString() {
         addSuffix = false;
     }
     if (addSuffix) {
-        line += " (" + fileLocation + ")";
+        line += ` (${fileLocation})`;
     }
     return line;
 }
 
 function cloneCallSite(frame) {
-    var object = {};
+    let object = {};
     Object.getOwnPropertyNames(Object.getPrototypeOf(frame)).forEach(function(name) {
-        object[name] = /^(?:is|get)/.test(name) ? function() { return frame[name].call(frame); } : frame[name];
+        object[name] = /^(?:is|get)/.test(name) ? function() { return frame[name](); } : frame[name];
     });
-    object.toString = CallSiteToString;
+    object.toString = callSiteToString;
     return object;
 }
 
 function wrapCallSite(frame) {
-    if(frame.isNative()) {
+    if (frame.isNative()) {
         return frame;
     }
 
     // Most call sites will return the source file from getFileName(), but code
     // passed to eval() ending in "//# sourceURL=..." will return the source file
     // from getScriptNameOrSourceURL() instead
-    var source = frame.getFileName() || frame.getScriptNameOrSourceURL();
+    let source = frame.getFileName() || frame.getScriptNameOrSourceURL();
     if (source) {
-        var line = frame.getLineNumber();
-        var column = frame.getColumnNumber() - 1;
-
-        // Fix position in Node where some (internal) code is prepended.
-        // See https://github.com/evanw/node-source-map-support/issues/36
-        var headerLength = 62;
-        if (line === 1 && column > headerLength && !isInBrowser() && !frame.isEval()) {
-            column -= headerLength;
-        }
-
-        var position = mapSourcePosition({
+        let line = frame.getLineNumber();
+        let column = frame.getColumnNumber() - 1;
+        let position = mapSourcePosition({
             source: source,
             line: line,
             column: column
@@ -272,7 +183,7 @@ function wrapCallSite(frame) {
     }
 
     // Code called using eval() needs special handling
-    var origin = frame.isEval() && frame.getEvalOrigin();
+    let origin = frame.isEval() && frame.getEvalOrigin();
     if (origin) {
         origin = mapEvalOrigin(origin);
         frame = cloneCallSite(frame);
@@ -288,78 +199,15 @@ function wrapCallSite(frame) {
 // http://code.google.com/p/v8/wiki/JavaScriptStackTraceApi
 function prepareStackTrace(error, stack) {
     if (emptyCacheBetweenOperations) {
-        fileContentsCache = {};
         sourceMapCache = {};
     }
 
     return error + stack.map(function(frame) {
-        return '\n    at ' + wrapCallSite(frame);
+        return `\n    at ${wrapCallSite(frame)}`;
     }).join('');
 }
 
-// Generate position and snippet of original source with pointer
-function getErrorSource(error) {
-    var match = /\n    at [^(]+ \((.*):(\d+):(\d+)\)/.exec(error.stack);
-    if (match) {
-        var source = match[1];
-        var line = +match[2];
-        var column = +match[3];
-
-        // Support the inline sourceContents inside the source map
-        var contents = fileContentsCache[source];
-
-        // Support files on disk
-        if (!contents && fs && fs.existsSync(source)) {
-            try {
-                contents = fs.readFileSync(source, 'utf8');
-            } catch (er) {
-                contents = '';
-            }
-        }
-
-        // Format the line from the original source code like node does
-        if (contents) {
-            var code = contents.split(/(?:\r\n|\r|\n)/)[line - 1];
-            if (code) {
-                return source + ':' + line + '\n' + code + '\n' +
-                    new Array(column).join(' ') + '^';
-            }
-        }
-    }
-    return null;
-}
-
-function printErrorAndExit (error) {
-    var source = getErrorSource(error);
-
-    if (source) {
-        console.error();
-        console.error(source);
-    }
-
-    console.error(error.stack);
-    process.exit(1);
-}
-
-function shimEmitUncaughtException () {
-    var origEmit = process.emit;
-
-    process.emit = function (type) {
-        if (type === 'uncaughtException') {
-            var hasStack = (arguments[1] && arguments[1].stack);
-            var hasListeners = (this.listeners(type).length > 0);
-
-            if (hasStack && !hasListeners) {
-                return printErrorAndExit(arguments[1]);
-            }
-        }
-
-        return origEmit.apply(this, arguments);
-    };
-}
-
 exports.wrapCallSite = wrapCallSite;
-exports.getErrorSource = getErrorSource;
 exports.mapSourcePosition = mapSourcePosition;
 exports.retrieveSourceMap = retrieveSourceMap;
 
@@ -367,40 +215,21 @@ exports.install = function(options) {
     options = options || {};
     // Allow source maps to be found by methods other than reading the files
     // directly from disk.
-    if (options.retrieveSourceMap) {
-        if (options.overrideRetrieveSourceMap) {
-            retrieveMapHandlers.length = 0;
-        }
-
-        retrieveMapHandlers.unshift(options.retrieveSourceMap);
-    }
+    retrieveSourceMap = options.retrieveSourceMap;
 
     // Configure options
     if (!emptyCacheBetweenOperations) {
-        emptyCacheBetweenOperations = 'emptyCacheBetweenOperations' in options ?
-            options.emptyCacheBetweenOperations : false;
+        emptyCacheBetweenOperations = 'emptyCacheBetweenOperations' in options
+            ? options.emptyCacheBetweenOperations : false;
     }
 
-    // Install the error reformatter
+    if (!defaultMapOffset) {
+        defaultMapOffset = 'defaultMapOffset' in options ? options.defaultMapOffset : defaultMapOffset;
+    }
+
+    // Install the error reformat
     if (!errorFormatterInstalled) {
         errorFormatterInstalled = true;
         Error.prepareStackTrace = prepareStackTrace;
-    }
-
-    if (!uncaughtShimInstalled) {
-        var installHandler = 'handleUncaughtExceptions' in options ?
-            options.handleUncaughtExceptions : true;
-
-        // Provide the option to not install the uncaught exception handler. This is
-        // to support other uncaught exception handlers (in test frameworks, for
-        // example). If this handler is not installed and there are no other uncaught
-        // exception handlers, uncaught exceptions will be caught by node's built-in
-        // exception handler and the process will still be terminated. However, the
-        // generated JavaScript code will be shown above the stack trace instead of
-        // the original source code.
-        if (installHandler && hasGlobalProcessEventEmitter()) {
-            uncaughtShimInstalled = true;
-            shimEmitUncaughtException();
-        }
     }
 };

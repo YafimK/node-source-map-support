@@ -13,7 +13,8 @@
     "concat-with-sourcemaps": "^1.0.5",
     "inline-source-map-comment": "^1.0.5",
     "source-map": "^0.6.0",
-    "sourcemap-validator": "^1.0.7"
+    "sourcemap-validator": "^1.0.7",
+    "vlq": "^1.0.0"
   },
   "devDependencies": {
     "browserify": "3.44.2",
